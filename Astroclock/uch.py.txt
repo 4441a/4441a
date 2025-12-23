@@ -1,0 +1,154 @@
+import requests
+from datetime import datetime, timedelta, timezone
+import zoneinfo
+
+# CONFIG
+LAT = 45.75
+LON = 21.23
+LOCAL_TZ = zoneinfo.ZoneInfo("Europe/Bucharest")
+
+# Planet order in Chaldean sequence
+PLANETS = ["Saturn", "Jupiter", "Mars", "Sun", "Venus", "Mercury", "Moon"]
+
+# Day rulers for Sun..Sat as indices into PLANETS
+# Sunday=Sun(3), Monday=Moon(6), Tuesday=Mars(2), Wednesday=Mercury(5),
+# Thursday=Jupiter(1), Friday=Venus(4), Saturday=Saturn(0)
+DAY_RULERS = [3, 6, 2, 5, 1, 4, 0]
+
+
+def get_sun_times(date_local):
+    """
+    Get today's sunrise and sunset for Timisoara using sunrise-sunset.org API.
+    Returns sunrise_utc, sunset_utc as aware datetime objects in UTC.
+    """
+    url = "https://api.sunrise-sunset.org/json"
+    params = {
+        "lat": LAT,
+        "lng": LON,
+        "date": date_local.strftime("%Y-%m-%d"),
+        "formatted": 0,  # ISO 8601
+    }
+    resp = requests.get(url, params=params)
+    data = resp.json()["results"]
+
+    sunrise_utc = datetime.fromisoformat(data["sunrise"].replace("Z", "+00:00"))
+    sunset_utc = datetime.fromisoformat(data["sunset"].replace("Z", "+00:00"))
+    return sunrise_utc, sunset_utc
+
+
+def get_next_sunrise_after(sunset_utc):
+    """
+    Get next sunrise after given sunset (i.e. next day’s sunrise).
+    """
+    next_day = (sunset_utc + timedelta(days=1)).astimezone(LOCAL_TZ).date()
+    return get_sun_times(datetime.combine(next_day, datetime.min.time(), tzinfo=LOCAL_TZ))
+
+
+def planetary_sequence_for_date(date_local):
+    """
+    Build the 24-planet sequence (day+night) for the given local date, Fludd-style.
+    """
+    # weekday index: Sunday=0..Saturday=6
+    # Python: Monday=0..Sunday=6
+    weekday_python = date_local.weekday()  # Mon=0
+    weekday_sun0 = (weekday_python + 1) % 7  # Sun=0..Sat=6
+
+    day_ruler_index = DAY_RULERS[weekday_sun0]
+
+    seq = []
+    idx = day_ruler_index
+    for _ in range(24):
+        seq.append(PLANETS[idx])
+        idx = (idx + 1) % 7
+    return seq
+
+
+def compute_boundaries(sunrise_utc, sunset_utc):
+    """
+    Compute the 24 boundary datetimes (25 points) from sunrise to next sunrise.
+    Returns list of 25 UTC datetimes and (day_hour_length, night_hour_length).
+    """
+    # Next day’s sunrise
+    next_sunrise_utc, _ = get_sun_times(
+        (sunset_utc + timedelta(days=1)).astimezone(LOCAL_TZ).date()
+    )
+
+    day_length = (sunset_utc - sunrise_utc).total_seconds()
+    night_length = (next_sunrise_utc - sunset_utc).total_seconds()
+
+    day_hour = day_length / 12.0
+    night_hour = night_length / 12.0
+
+    boundaries = []
+
+    # 12 daytime boundaries
+    for i in range(13):
+        boundaries.append(sunrise_utc + timedelta(seconds=day_hour * i))
+
+    # 12 nighttime boundaries
+    for i in range(1, 13):
+        boundaries.append(sunset_utc + timedelta(seconds=night_hour * i))
+
+    return boundaries, day_hour, night_hour
+
+
+def current_planetary_hour_info(now_local=None):
+    """
+    Return (current_planet, current_hour_index, next_change_utc, debug_dict)
+    - current_hour_index: 0..23
+    """
+    if now_local is None:
+        now_local = datetime.now(LOCAL_TZ)
+
+    today_local = now_local.date()
+    sunrise_utc, sunset_utc = get_sun_times(
+        datetime.combine(today_local, datetime.min.time(), tzinfo=LOCAL_TZ)
+    )
+
+    boundaries, _, _ = compute_boundaries(sunrise_utc, sunset_utc)
+    seq = planetary_sequence_for_date(datetime.combine(today_local, datetime.min.time(), tzinfo=LOCAL_TZ))
+
+    now_utc = now_local.astimezone(timezone.utc)
+
+    # find current hour index
+    current_index = None
+    for i in range(24):
+        if boundaries[i] <= now_utc < boundaries[i + 1]:
+            current_index = i
+            break
+    if current_index is None:
+        # If between last boundary and next sunrise
+        current_index = 23
+
+    current_planet = seq[current_index]
+
+    # next change time
+    # If at or after last boundary, next change is next day sunrise
+    if current_index == 23:
+        next_change_utc = boundaries[-1]
+    else:
+        next_change_utc = boundaries[current_index + 1]
+
+    debug = {
+        "now_local": now_local.isoformat(),
+        "now_utc": now_utc.isoformat(),
+        "sunrise_utc": sunrise_utc.isoformat(),
+        "sunset_utc": sunset_utc.isoformat(),
+        "hour_index_0_based": current_index,
+        "hour_number_1_based": current_index + 1,
+        "planet_sequence_24h": seq,
+    }
+
+    return current_planet, current_index, next_change_utc, debug
+
+
+if __name__ == "__main__":
+    planet, idx, next_change, dbg = current_planetary_hour_info()
+
+    print("Local time:", dbg["now_local"])
+    print("Sunrise UTC:", dbg["sunrise_utc"])
+    print("Sunset UTC :", dbg["sunset_utc"])
+    print(f"Current planetary hour index (0–23): {idx}")
+    print(f"Hour number (1–24): {dbg['hour_number_1_based']}")
+    print("Current governor planet:", planet)
+    print("Next change at (UTC):", next_change.isoformat())
