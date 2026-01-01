@@ -1,0 +1,153 @@
+# furui_dsp_library.py
+# A Python library inspired by Sadao Furui's "Digital Speech Processing, Synthesis, and Recognition"
+# Implements key algorithms and functions for educational purposes.
+# Requires: numpy, scipy
+# Usage: Import and call functions with appropriate signal data (e.g., numpy arrays for speech waveforms).
+
+import numpy as np
+from scipy.signal import lfilter, resample
+from scipy.linalg import toeplitz
+from hmmlearn.hmm import GaussianHMM  # For HMM-based recognition (install hmmlearn if needed)
+
+def speech_production_model(amplitude=1.0, frequency=100, duration=1.0, fs=16000):
+    """
+    Simple speech production model simulation (e.g., glottal pulse approximation).
+    Based on Chapter 2: Speech Production Models.
+    Generates a basic voiced sound waveform.
+    
+    Args:
+        amplitude (float): Signal amplitude.
+        frequency (float): Fundamental frequency (pitch).
+        duration (float): Duration in seconds.
+        fs (int): Sampling frequency.
+    
+    Returns:
+        np.ndarray: Simulated speech waveform.
+    """
+    t = np.linspace(0, duration, int(fs * duration))
+    waveform = amplitude * np.sin(2 * np.pi * frequency * t)
+    return waveform
+
+def lpc_analysis(signal, order=12, preemphasis=0.97):
+    """
+    Linear Predictive Coding (LPC) analysis.
+    Based on Chapter 4: Linear Predictive Coding (LPC).
+    Computes LPC coefficients using autocorrelation and Levinson-Durbin recursion.
+    
+    Args:
+        signal (np.ndarray): Input speech frame (e.g., windowed segment).
+        order (int): LPC order (number of coefficients).
+        preemphasis (float): Pre-emphasis factor.
+    
+    Returns:
+        np.ndarray: LPC coefficients.
+    """
+    # Pre-emphasis
+    signal = np.append(signal[0], signal[1:] - preemphasis * signal[:-1])
+    
+    # Autocorrelation
+    autocorr = np.correlate(signal, signal, mode='full')[len(signal)-1:]
+    R = toeplitz(autocorr[:order])
+    r = autocorr[1:order+1]
+    
+    # Levinson-Durbin recursion
+    a = np.linalg.solve(R, r)
+    a = np.insert(-a, 0, 1.0)  # Include a0 = 1
+    return a
+
+def lpc_synthesis(excitation, lpc_coeffs, gain=1.0):
+    """
+    LPC-based speech synthesis (analysis-synthesis method).
+    Based on Chapter 3: Speech Analysis and Analysis-Synthesis Systems.
+    Reconstructs signal using LPC filter on excitation source.
+    
+    Args:
+        excitation (np.ndarray): Excitation signal (e.g., noise for unvoiced, pulse for voiced).
+        lpc_coeffs (np.ndarray): LPC coefficients.
+        gain (float): Gain factor.
+    
+    Returns:
+        np.ndarray: Synthesized speech signal.
+    """
+    synthesized = gain * lfilter([1], lpc_coeffs, excitation)
+    return synthesized
+
+def waveform_coding_synthesis(original_signal, bit_rate_reduction_factor=2):
+    """
+    Basic waveform coding for synthesis.
+    Based on Chapter 7: Synthesis Based on Waveform Coding.
+    Simplifies by downsampling and upsampling (e.g., ADPCM-like approximation).
+    
+    Args:
+        original_signal (np.ndarray): Input waveform.
+        bit_rate_reduction_factor (int): Factor for reducing sample rate (simulates compression).
+    
+    Returns:
+        np.ndarray: Reconstructed waveform.
+    """
+    downsampled = resample(original_signal, len(original_signal) // bit_rate_reduction_factor)
+    reconstructed = resample(downsampled, len(original_signal))
+    return reconstructed
+
+def cepstral_analysis(signal, n_ceps=13):
+    """
+    Cepstral analysis for feature extraction (used in recognition).
+    Based on recognition chapters (e.g., MFCC-like, but simplified).
+    
+    Args:
+        signal (np.ndarray): Input speech frame.
+        n_ceps (int): Number of cepstral coefficients.
+    
+    Returns:
+        np.ndarray: Cepstral coefficients.
+    """
+    spectrum = np.fft.fft(signal)
+    log_spectrum = np.log(np.abs(spectrum) + 1e-10)
+    cepstrum = np.fft.ifft(log_spectrum).real
+    return cepstrum[:n_ceps]
+
+def vector_quantization(codebook, features):
+    """
+    Vector Quantization (VQ) for compression/recognition.
+    Based on Appendix C: Vector Quantization Algorithm.
+    Finds nearest codebook entry for each feature vector.
+    
+    Args:
+        codebook (np.ndarray): Pre-trained codebook (N x D array).
+        features (np.ndarray): Feature vectors (M x D array).
+    
+    Returns:
+        np.ndarray: Quantized indices.
+    """
+    distances = np.linalg.norm(features[:, np.newaxis] - codebook, axis=2)
+    indices = np.argmin(distances, axis=1)
+    return indices
+
+def hmm_speech_recognition(train_features, test_features, n_components=3):
+    """
+    Basic HMM-based speech recognition.
+    Based on Chapter 8-9: Theory and Implementation of HMM, Large-Vocabulary Continuous Speech Recognition.
+    Trains a simple Gaussian HMM and predicts on test data.
+    
+    Args:
+        train_features (list of np.ndarray): Training sequences.
+        test_features (list of np.ndarray): Test sequences.
+        n_components (int): Number of HMM states.
+    
+    Returns:
+        list: Predicted log probabilities for each test sequence.
+    """
+    model = GaussianHMM(n_components=n_components, covariance_type="diag")
+    lengths = [len(seq) for seq in train_features]
+    train_data = np.concatenate(train_features)
+    model.fit(train_data, lengths)
+    scores = [model.score(seq) for seq in test_features]
+    return scores
+
+# Example usage (commented out):
+# if __name__ == "__main__":
+#     fs = 16000
+#     signal = speech_production_model(frequency=120, duration=0.1, fs=fs)
+#     lpc_coeffs = lpc_analysis(signal)
+#     synthesized = lpc_synthesis(np.random.randn(len(signal)), lpc_coeffs)
+#     print("Synthesized signal:", synthesized[:10])
